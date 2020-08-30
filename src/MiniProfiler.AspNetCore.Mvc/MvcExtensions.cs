@@ -1,11 +1,16 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ViewComponents;
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using StackExchange.Profiling;
 using StackExchange.Profiling.Internal;
 using StackExchange.Profiling.Storage;
 using System;
+
+#if NETCOREAPP3_0
+using StackExchange.Profiling.Data;
+#else
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ViewComponents;
+#endif
 
 namespace Microsoft.Extensions.DependencyInjection
 {
@@ -18,7 +23,7 @@ namespace Microsoft.Extensions.DependencyInjection
         /// Adds MiniProfiler timings for actions and views.
         /// </summary>
         /// <param name="services">The services collection to configure.</param>
-        /// <param name="configureOptions">An Action{MiniProfilerOptions} to configure options for MiniProfiler.</param>
+        /// <param name="configureOptions">An <see cref="Action{MiniProfilerOptions}"/> to configure options for MiniProfiler.</param>
         public static IMiniProfilerBuilder AddMiniProfiler(this IServiceCollection services, Action<MiniProfilerOptions> configureOptions = null)
         {
             services.AddMemoryCache(); // Unconditionally register an IMemoryCache since it's the most common and default case
@@ -29,15 +34,16 @@ namespace Microsoft.Extensions.DependencyInjection
             }
             // Set background statics
             services.Configure<MiniProfilerOptions>(o => MiniProfiler.Configure(o));
+            services.AddSingleton<DiagnosticInitializer>(); // For any IMiniProfilerDiagnosticListener registration
 
-            // See https://github.com/MiniProfiler/dotnet/issues/162 for plans
-            // Blocked on https://github.com/aspnet/Mvc/issues/6222
-            //services.AddSingleton<IMiniProfilerDiagnosticListener, MvcViewDiagnosticListener>();
+#if NETCOREAPP3_0
+            services.AddSingleton<IMiniProfilerDiagnosticListener, MvcDiagnosticListener>(); // For view and action profiling
+#else
             services.AddTransient<IConfigureOptions<MvcOptions>, MiniProfilerSetup>()
-                    .AddTransient<IConfigureOptions<MvcViewOptions>, MiniProfilerSetup>();
-#if !NETCOREAPP3_0
-            services.AddTransient<IViewComponentInvokerFactory, ProfilingViewComponentInvokerFactory>();
+                    .AddTransient<IConfigureOptions<MvcViewOptions>, MiniProfilerSetup>()
+                    .AddTransient<IViewComponentInvokerFactory, ProfilingViewComponentInvokerFactory>();
 #endif
+
             return new MiniProfilerBuilder(services);
         }
     }
@@ -59,6 +65,7 @@ namespace Microsoft.Extensions.DependencyInjection
         }
     }
 
+#if !NETCOREAPP3_0
     internal class MiniProfilerSetup : IConfigureOptions<MvcViewOptions>, IConfigureOptions<MvcOptions>
     {
         public void Configure(MvcViewOptions options)
@@ -74,4 +81,5 @@ namespace Microsoft.Extensions.DependencyInjection
             options.Filters.Add(new ProfilingActionFilter());
         }
     }
+#endif
 }

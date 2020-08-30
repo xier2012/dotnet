@@ -40,6 +40,12 @@ namespace StackExchange.Profiling {
         }
     }
 
+    enum ColorScheme {
+        Light = 'Light',
+        Dark = 'Dark',
+        Auto = 'Auto',
+    }
+
     interface ITiming {
         Id: string;
         Name: string;
@@ -50,6 +56,7 @@ namespace StackExchange.Profiling {
         // additive on client side
         CustomTimingStats: { [id: string]: ICustomTimingStat };
         DurationWithoutChildrenMilliseconds: number;
+        DurationOfChildrenMilliseconds: number;
         Depth: number;
         HasCustomTimings: boolean;
         HasDuplicateCustomTimings: { [id: string]: boolean };
@@ -58,6 +65,12 @@ namespace StackExchange.Profiling {
         Parent: ITiming;
         // added for gaps (TODO: change all this)
         richTiming: IGapTiming[];
+        // In debug mode only
+        DebugInfo: ITimingDebugInfo;
+    }
+
+    interface ITimingDebugInfo {
+        RichHtmlStack: string;
     }
 
     interface ICustomTiming {
@@ -93,6 +106,7 @@ namespace StackExchange.Profiling {
 
     interface IOptions {
         authorized: boolean;
+        colorScheme: ColorScheme;
         currentId: string;
         ids: string[];
         ignoredDuplicateExecuteTypes: string[];
@@ -269,10 +283,11 @@ namespace StackExchange.Profiling {
             const bool = (arg: string) => arg === 'true';
 
             this.options = {
-                ids: data.ids.split(','),
+                ids: (data.ids || '').split(','),
                 path: data.path,
                 version: data.version,
                 renderPosition: data.position as RenderPosition,
+                colorScheme: data.scheme as ColorScheme,
                 showTrivial: bool(data.trivial),
                 trivialMilliseconds: parseFloat(data.trivialMilliseconds),
                 showChildrenTime: bool(data.children),
@@ -291,7 +306,7 @@ namespace StackExchange.Profiling {
                         // all fetched profilers will go in here
                         // MiniProfiler.RenderIncludes() sets which corner to render in - default is upper left
                         const container = document.createElement('div');
-                        container.className = 'mp-results mp-' + mp.options.renderPosition.toLowerCase()
+                        container.className = 'mp-results mp-' + mp.options.renderPosition.toLowerCase() + ' mp-scheme-' + mp.options.colorScheme.toLowerCase()
                         document.body.appendChild(container);
                         mp.container = container;
 
@@ -300,8 +315,15 @@ namespace StackExchange.Profiling {
 
                         // fetch and render results
                         mp.fetchResults(mp.options.ids);
+                        
+                        let lsDisplayValue;
+                        try {
+                            lsDisplayValue = window.localStorage.getItem('MiniProfiler-Display');
+                        } catch(e) { }
 
-                        if (mp.options.startHidden) {
+                        if (lsDisplayValue) {
+                            mp.container.style.display = lsDisplayValue;
+                        } else if (mp.options.startHidden) {
                             mp.container.style.display = 'none';
                         }
 
@@ -380,6 +402,7 @@ namespace StackExchange.Profiling {
                 const getTiming = (profiler: IProfiler, name: string) =>
                     profiler.ClientTimings.Timings.filter((t) => t.Name === name)[0] || { Name: name, Duration: '', Start: '' };
 
+                document.documentElement.classList.add('mp-scheme-' + opt.colorScheme.toLowerCase());
                 fetch(opt.path + 'results-list?last-id=' + id, {
                     method: 'GET',
                     headers: {
@@ -469,6 +492,7 @@ namespace StackExchange.Profiling {
 
             function processTiming(timing: ITiming, parent: ITiming, depth: number) {
                 timing.DurationWithoutChildrenMilliseconds = timing.DurationMilliseconds;
+                timing.DurationOfChildrenMilliseconds = 0;
                 timing.Parent = parent;
                 timing.Depth = depth;
                 timing.HasDuplicateCustomTimings = {};
@@ -477,6 +501,7 @@ namespace StackExchange.Profiling {
                 for (const child of timing.Children || []) {
                     processTiming(child, timing, depth + 1);
                     timing.DurationWithoutChildrenMilliseconds -= child.DurationMilliseconds;
+                    timing.DurationOfChildrenMilliseconds += child.DurationMilliseconds;
                 }
 
                 // do this after subtracting child durations
@@ -494,7 +519,7 @@ namespace StackExchange.Profiling {
                     timing.HasCustomTimings = true;
                     result.HasCustomTimings = true;
                     for (const customType of Object.keys(timing.CustomTimings)) {
-                        const customTimings = timing.CustomTimings[customType];
+                        const customTimings = timing.CustomTimings[customType] || [] as ICustomTiming[];
                         const customStat = {
                             Duration: 0,
                             Count: 0,
@@ -664,13 +689,43 @@ namespace StackExchange.Profiling {
                 }
                 return (milliseconds || 0).toFixed(decimalPlaces === undefined ? 1 : decimalPlaces);
             };
+            const renderDebugInfo = (timing: ITiming) => {
+                if (timing.DebugInfo) {
+                    const customTimings = (p.CustomTimingStats ? Object.keys(p.CustomTimingStats) : []).map((tk) => timing.CustomTimings[tk] ? `
+                <div class="mp-nested-timing">
+                    <span class="mp-duration">${timing.CustomTimingStats[tk].Count}</span> ${encode(tk)} call${timing.CustomTimingStats[tk].Count == 1 ? '' : 's'} 
+                    totalling <span class="mp-duration">${duration(timing.CustomTimingStats[tk].Duration)}</span> <span class="mp-unit">ms</span>
+                    ${((timing.HasDuplicateCustomTimings[tk] || timing.HasWarnings[tk]) ? '<span class="mp-warning">(duplicates deletected)</span>' : '')}
+                </div>` : '').join('');
+                    return `
+          <div class="mp-debug-tooltip">
+            <div class="mp-name">Detailed info for ${encode(timing.Name)}</div>
+            <div>Starts at: <span class="mp-duration">${duration(timing.StartMilliseconds)}</span> <span class="mp-unit">ms</span></div>
+            <div>
+                Overall duration (with children): <span class="mp-duration">${duration(timing.DurationMilliseconds)}</span> <span class="mp-unit">ms</span>
+                <div class="mp-nested-timing">
+                  Self duration: <span class="mp-duration">${duration(timing.DurationWithoutChildrenMilliseconds)}</span> <span class="mp-unit">ms</span>
+                  ${customTimings}
+                </div>
+                <div class="mp-nested-timing">
+                  Children (${timing.Children ? timing.Children.length : '0'}) duration: <span class="mp-duration">${duration(timing.DurationOfChildrenMilliseconds)}</span> <span class="mp-unit">ms</span>
+                </div>
+            </div>
+            <div>Stack:</div>
+            <pre class="mp-stack-trace">${timing.DebugInfo.RichHtmlStack}</pre>
+          </div>
+          <span title="Debug Info">🔍</span>`;
+                }
+                return '';
+            };
 
             const renderTiming = (timing: ITiming) => {
                 const customTimingTypes = p.CustomTimingStats ? Object.keys(p.CustomTimingStats) : [];
                 let str = `
-  <tr class="${timing.IsTrivial ? 'mp-trivial' : ''}" data-timing-id="${timing.Id}">
-    <td class="mp-label" title="${encode(timing.Name && timing.Name.length > 45 ? timing.Name : '')}"${timing.Depth > 0 ? ` style="padding-left:${timing.Depth * 11}px;"` : ''}>
-      ${encode(timing.Name.slice(0, 45))}${encode(timing.Name && timing.Name.length > 45 ? '...' : '')}
+  <tr class="${timing.IsTrivial ? 'mp-trivial' : ''}${timing.DebugInfo ? ' mp-debug' : ''}" data-timing-id="${timing.Id}">
+    <td>${renderDebugInfo(timing)}</td>
+    <td class="mp-label" title="${encode(timing.Name)}"${timing.Depth > 0 ? ` style="padding-left:${timing.Depth * 11}px;"` : ''}>
+      ${encode(timing.Name)}
     </td>
     <td class="mp-duration" title="duration of this step without any children's durations">
       ${duration(timing.DurationWithoutChildrenMilliseconds)}
@@ -700,7 +755,7 @@ namespace StackExchange.Profiling {
         <table class="mp-timings">
           <thead>
             <tr>
-              <th></th>
+              <th colspan="2"></th>
               <th>duration (ms)</th>
               <th class="mp-more-columns">with children (ms)</th>
               <th class="time-from-start mp-more-columns">from start (ms)</th>
@@ -712,7 +767,7 @@ namespace StackExchange.Profiling {
           </tbody>
           <tfoot>
             <tr>
-              <td colspan="2"></td>
+              <td colspan="3"></td>
               <td class="mp-more-columns" colspan="2"></td>
             </tr>
           </tfoot>
@@ -944,17 +999,18 @@ namespace StackExchange.Profiling {
                 // since queries are already shown, just highlight and scroll when clicking a '1 sql' link
                 document.addEventListener('click', function (event) {
                     const target = event.target as HTMLElement;
-                    const queriesButton = target.closest('.mp-popup .mp-queries-show') as HTMLElement;
+                    const queriesButton = target.closest<HTMLElement>('.mp-popup .mp-queries-show');
                     if (queriesButton) {
                         mp.scrollToQuery(queriesButton, document.body.querySelector('.mp-queries'));
                     }
                 });
+                document.documentElement.classList.add('mp-scheme-' + mp.options.colorScheme.toLowerCase());
             } else {
                 document.addEventListener('click', function (event) {
                     const target = event.target as HTMLElement;
-                    const button = target.closest('.mp-button') as HTMLElement;
+                    const button = target.closest<HTMLElement>('.mp-button');
                     if (button) {
-                        const popup = button.parentElement.querySelector('.mp-popup') as HTMLDivElement;
+                        const popup = button.parentElement.querySelector<HTMLDivElement>('.mp-popup');
                         const wasActive = button.parentElement.classList.contains('active');
                         const pos = mp.options.renderPosition;
 
@@ -984,7 +1040,7 @@ namespace StackExchange.Profiling {
                         }
                         return;
                     }
-                    const queriesButton = target.closest('.mp-queries-show') as HTMLElement;
+                    const queriesButton = target.closest<HTMLElement>('.mp-queries-show');
                     if (queriesButton) {
                         // opaque background
                         document.body.insertAdjacentHTML('beforeend', '<div class="mp-overlay"><div class="mp-overlay-bg"/></div>');
@@ -992,6 +1048,7 @@ namespace StackExchange.Profiling {
                         const queriesOrig = queriesButton.closest('.mp-result').querySelector('.mp-queries');
                         const queries = queriesOrig.cloneNode(true) as HTMLDivElement;
                         queries.style.display = 'block';
+                        overlay.classList.add('mp-scheme-' + mp.options.colorScheme.toLowerCase());
                         overlay.appendChild(queries);
 
                         mp.scrollToQuery(queriesButton, queries);
@@ -1004,10 +1061,10 @@ namespace StackExchange.Profiling {
                 // Background and esc binding to close popups
                 const tryCloseActive = (event: MouseEvent | KeyboardEvent) => {
                     const target = event.target as HTMLElement;
-                    const active = document.querySelector('.mp-result.active') as HTMLElement;
+                    const active = document.querySelector<HTMLElement>('.mp-result.active');
                     if (!active) return;
 
-                    const bg = document.querySelector('.mp-overlay') as HTMLDivElement;
+                    const bg = document.querySelector<HTMLDivElement>('.mp-overlay');
                     const isEscPress = event.type === 'keyup' && event.which === 27;
                     const isBgClick = event.type === 'click' && !target.closest('.mp-queries, .mp-results');
 
@@ -1155,8 +1212,12 @@ namespace StackExchange.Profiling {
                             && e.ctrlKey == modifiers.ctrl.wanted
                             && e.shiftKey == modifiers.shift.wanted
                             && e.altKey == modifiers.alt.wanted) {
-                            const results = document.querySelector('.mp-results') as HTMLElement;
-                            results.style.display = results.style.display == 'none' ? 'block' : 'none';
+                            const results = document.querySelector<HTMLElement>('.mp-results');
+                            const newValue = results.style.display == 'none' ? 'block' : 'none';
+                            results.style.display = newValue;
+                            try {
+                                window.localStorage.setItem('MiniProfiler-Display', newValue);
+                            } catch(e) { }
                         }
                     }, false);
                 }
@@ -1165,28 +1226,20 @@ namespace StackExchange.Profiling {
 
         private initControls = (container: HTMLDivElement) => {
             if (this.options.showControls) {
-                container.insertAdjacentHTML('beforeend', '<div class="mp-controls"><span class="mp-min-max">m</span><span class="mp-clear">c</span></div>');
-                this.controls = container.querySelector('mp-controls') as HTMLDivElement;
+                container.insertAdjacentHTML('beforeend', '<div class="mp-controls"><span class="mp-min-max" title="Minimize">m</span><span class="mp-clear" title="Clear">c</span></div>');
+                this.controls = container.querySelector<HTMLDivElement>('.mp-controls');
 
-                const minMax = container.querySelector('.mp-controls .mp-min-max')[0];
+                const minMax = container.querySelector<HTMLSpanElement>('.mp-controls .mp-min-max');
                 minMax.addEventListener('click', function () {
                     container.classList.toggle('mp-min');
                 });
 
-                container.addEventListener('mouseover', function () {
-                    if (this.classList.contains('mp-min')) {
-                        minMax.style.display = 'block';
-                    }
-                });
-                container.addEventListener('mouseout', function () {
-                    if (this.classList.contains('mp-min')) {
-                        minMax.style.display = 'none';
-                    }
-                });
-
-                const clear = container.querySelector('.mp-result')[0];
+                const clear = container.querySelector<HTMLSpanElement>('.mp-controls .mp-clear');
                 clear.addEventListener('click', function () {
-                    clear.parentNode.removeChild(clear);
+                    const results = container.querySelectorAll('.mp-result');
+                    results.forEach(item => {
+                        item.parentNode.removeChild(item);
+                    });
                 });
             } else {
                 container.classList.add('mp-no-controls');

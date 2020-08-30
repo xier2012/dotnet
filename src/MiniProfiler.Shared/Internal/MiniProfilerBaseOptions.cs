@@ -24,6 +24,11 @@ namespace StackExchange.Profiling.Internal
         public virtual string VersionHash { get; set; } = typeof(MiniProfilerBaseOptions).GetTypeInfo().Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? Version.ToString();
 
         /// <summary>
+        /// Whether to enable verbose diagnostics mode in MiniProfiler.
+        /// </summary>
+        public bool EnableDebugMode { get; set; }
+
+        /// <summary>
         /// Assemblies to exclude from the stack trace report.
         /// </summary>
         public HashSet<string> ExcludedAssemblies { get; } = new HashSet<string>
@@ -123,6 +128,11 @@ namespace StackExchange.Profiling.Internal
         public RenderPosition PopupRenderPosition { get; set; } = RenderPosition.Left;
 
         /// <summary>
+        /// Determines which color scheme to use when rendering (the class to apply for CSS styling).
+        /// </summary>
+        public ColorScheme ColorScheme { get; set; } = ColorScheme.Light;
+
+        /// <summary>
         /// Allows showing/hiding of popup results buttons via keyboard.
         /// </summary>
         public string PopupToggleKeyboardShortcut { get; set; } = "Alt+P";
@@ -205,6 +215,11 @@ namespace StackExchange.Profiling.Internal
         /// Called when passed to <see cref="MiniProfiler.Configure{T}(T)"/>.
         /// </summary>
         protected virtual void OnConfigure() { }
+
+        /// <summary>
+        /// An action to call when MiniProfiler has an internal error. For logging, etc.
+        /// </summary>
+        public Action<Exception> OnInternalError { get; set; }
 
         internal void Configure() => OnConfigure();
     }

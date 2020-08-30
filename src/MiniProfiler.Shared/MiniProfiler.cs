@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -222,7 +223,14 @@ namespace StackExchange.Profiling
             {
                 return false;
             }
-            Options.ProfilerProvider.Stopped(this, discardResults);
+            try
+            {
+                Options.ProfilerProvider.Stopped(this, discardResults);
+            }
+            catch (Exception ex)
+            {
+                Options.OnInternalError?.Invoke(ex);
+            }
             return true;
         }
 
@@ -240,7 +248,14 @@ namespace StackExchange.Profiling
             {
                 return false;
             }
-            await Options.ProfilerProvider.StoppedAsync(this, discardResults).ConfigureAwait(false);
+            try
+            {
+                await Options.ProfilerProvider.StoppedAsync(this, discardResults).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Options.OnInternalError?.Invoke(ex);
+            }
             return true;
         }
 
@@ -333,6 +348,7 @@ namespace StackExchange.Profiling
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal Timing StepImpl(string name, decimal? minSaveMs = null, bool? includeChildrenWithMinSave = false)
         {
             return new Timing(this, Head, name, minSaveMs, includeChildrenWithMinSave);

@@ -85,7 +85,7 @@ namespace StackExchange.Profiling
                 mp.User = Options.UserIdProvider?.Invoke(context.Request);
 
                 // Always add this profiler's header (and any async requests before it)
-                using (mp.StepIf("MiniProfiler Prep", minSaveMs: 0.1m))
+                using (mp.StepIf("MiniProfiler Init", minSaveMs: 0.1m))
                 {
                     await SetHeadersAndState(context, mp).ConfigureAwait(false);
                 }
@@ -100,15 +100,13 @@ namespace StackExchange.Profiling
 #endif
 
                 // Execute the pipe
-#pragma warning disable RCS1090 // Call 'ConfigureAwait(false)'.
                 await _next(context);
-#pragma warning restore RCS1090 // Call 'ConfigureAwait(false)'.
                 // Assign name
                 EnsureName(mp, context);
                 // Stop (and record)
                 await mp.StopAsync().ConfigureAwait(false);
 
-#if NETCOREAPP3_0 // TODO: Evaluate if this works after http/2 local support in preview 7, maybe backport to netcoreapp2.2
+#if NETCOREAPP3_0 // TODO: Evaluate if this works after http/2 local support in preview 7, maybe backport to netcoreapp2.1
                 if (appendServerTimingHeader && mp != null)
                 {
                     context.Response.AppendTrailer("Server-Timing", mp.GetServerTimingHeader());
@@ -118,9 +116,7 @@ namespace StackExchange.Profiling
             else
             {
                 // Don't profile, only relay
-#pragma warning disable RCS1090 // Call 'ConfigureAwait(false)'.
                 await _next(context);
-#pragma warning restore RCS1090 // Call 'ConfigureAwait(false)'.
             }
         }
 
@@ -150,11 +146,21 @@ namespace StackExchange.Profiling
                         .ToStringRecycle();
 
                 var routeData = context.GetRouteData();
-                if (routeData != null)
+                if (routeData?.Values["controller"] != null)
                 {
                     profiler.Name = routeData.Values["controller"] + "/" + routeData.Values["action"];
                 }
-                else
+                else if (routeData?.Values["page"] != null)
+                {
+                    profiler.Name = routeData.Values["page"].ToString();
+                }
+#if NETCOREAPP3_0
+                else if (context.GetEndpoint() is Endpoint endPoint && endPoint.DisplayName.HasValue())
+                {
+                    profiler.Name = endPoint.DisplayName;
+                }    
+#endif
+               else
                 {
                     profiler.Name = url;
                     if (profiler.Name.Length > 50)
@@ -172,18 +178,29 @@ namespace StackExchange.Profiling
             try
             {
                 // Are we authorized???
-                var isAuthorized = Options.ResultsAuthorize?.Invoke(context.Request) ?? true;
+                bool isAuthorized;
+                using (current.StepIf("Authorize", 0.1m))
+                {
+                    isAuthorized = await AuthorizeRequestAsync(context, isList: false, setResponse: false);
+                }
 
                 // Grab any past profilers (e.g. from a previous redirect)
-                var profilerIds = (isAuthorized ? await Options.ExpireAndGetUnviewedAsync(current.User).ConfigureAwait(false) : null)
-                                 ?? new List<Guid>(1);
+                List<Guid> profilerIds;
+                using (current.StepIf("Get Profiler IDs", 0.1m))
+                {
+                    profilerIds = (isAuthorized ? await Options.ExpireAndGetUnviewedAsync(current.User).ConfigureAwait(false) : null)
+                                     ?? new List<Guid>(1);
+                }
 
                 // Always add the current
                 profilerIds.Add(current.Id);
 
                 if (profilerIds.Count > 0)
                 {
-                    context.Response.Headers.Add("X-MiniProfiler-Ids", profilerIds.ToJson());
+                    using (current.StepIf("Set Headers", 0.1m))
+                    {
+                        context.Response.Headers.Add("X-MiniProfiler-Ids", profilerIds.ToJson());
+                    }
                 }
 
                 // Set the state to use in RenderIncludes() down the pipe later
@@ -206,7 +223,7 @@ namespace StackExchange.Profiling
             switch (subPath.Value)
             {
                 case "/results-index":
-                    result = ResultsIndex(context);
+                    result = await ResultsIndexAsync(context);
                     break;
 
                 case "/results-list":
@@ -237,18 +254,22 @@ namespace StackExchange.Profiling
         /// </summary>
         /// <param name="context">The context to attempt to authorize a user for.</param>
         /// <param name="isList">Whether this is a list route being accessed.</param>
-        /// <param name="message">The access denied message, if present.</param>
-        private bool AuthorizeRequest(HttpContext context, bool isList, out string message)
+        /// <param name="setResponse">Whether to set response properties</param>
+        private async Task<bool> AuthorizeRequestAsync(HttpContext context, bool isList, bool setResponse = true)
         {
-            message = null;
-            var authorize = Options.ResultsAuthorize;
-            var authorizeList = Options.ResultsListAuthorize;
-
-            if ((authorize != null && !authorize(context.Request)) || (isList && (authorizeList != null && !authorizeList(context.Request))))
+            var req = context.Request;
+            // Deny access if we a) have a configured delegate, and b) it says no
+            if (Options.ResultsAuthorize != null && !Options.ResultsAuthorize.Invoke(req)
+                || (Options.ResultsAuthorizeAsync != null && !await Options.ResultsAuthorizeAsync(req))
+                || (isList && Options.ResultsListAuthorize != null && !Options.ResultsListAuthorize(req))
+                || (isList && Options.ResultsListAuthorizeAsync != null && !await Options.ResultsListAuthorizeAsync(req))
+            )
             {
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                context.Response.ContentType = "text/plain";
-                message = "unauthorized";
+                if (setResponse)
+                {
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    context.Response.ContentType = "text/plain";
+                }
                 return false;
             }
 
@@ -259,11 +280,11 @@ namespace StackExchange.Profiling
         /// Returns the list of profiling sessions
         /// </summary>
         /// <param name="context">The results list HTML, if authorized.</param>
-        private string ResultsIndex(HttpContext context)
+        private async Task<string> ResultsIndexAsync(HttpContext context)
         {
-            if (!AuthorizeRequest(context, isList: true, message: out string message))
+            if (!await AuthorizeRequestAsync(context, isList: true))
             {
-                return message;
+                return "Unauthorized";
             }
 
             context.Response.ContentType = "text/html; charset=utf-8";
@@ -278,9 +299,9 @@ namespace StackExchange.Profiling
         /// <param name="context">The context to get the results list for.</param>
         private async Task<string> ResultsListAsync(HttpContext context)
         {
-            if (!AuthorizeRequest(context, isList: true, message: out string message))
+            if (!await AuthorizeRequestAsync(context, isList: true))
             {
-                return message;
+                return "Unauthorized";
             }
 
             var guids = await Options.Storage.ListAsync(100).ConfigureAwait(false);
@@ -374,7 +395,7 @@ namespace StackExchange.Profiling
                 await Options.Storage.SaveAsync(profiler).ConfigureAwait(false);
             }
 
-            if (!AuthorizeRequest(context, isList: false, message: out string authorizeMessage))
+            if (!await AuthorizeRequestAsync(context, isList: false))
             {
                 context.Response.ContentType = "application/json";
                 return @"""hidden"""; // JSON

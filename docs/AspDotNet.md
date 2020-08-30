@@ -3,7 +3,7 @@ title: "ASP.NET"
 layout: "default"
 ---
 ### ASP.NET
-If you'd rather learn by example, sample apps are available. [The ASP.NET MVC 5 sample is here](https://github.com/MiniProfiler/dotnet/tree/master/samples/Samples.Mvc5), with the important bits in [Global.asax.cs](https://github.com/MiniProfiler/dotnet/blob/master/samples/Samples.Mvc5/Global.asax.cs).
+If you'd rather learn by example, sample apps are available. [The ASP.NET MVC 5 sample is here](https://github.com/MiniProfiler/dotnet/tree/main/samples/Samples.Mvc5), with the important bits in [Global.asax.cs](https://github.com/MiniProfiler/dotnet/blob/main/samples/Samples.Mvc5/Global.asax.cs).
 
 #### Installation and Configuration
 
@@ -42,6 +42,7 @@ protected void Application_Start()
         // specified position in the .RenderIncludes() call.
         PopupRenderPosition = RenderPosition.Right,  // defaults to left
         PopupMaxTracesToShow = 10,                   // defaults to 15
+        ColorScheme = ColorScheme.Auto,              // defaults to light
 
         // ResultsAuthorize (optional - open to all by default):
         // because profiler results can contain sensitive data (e.g. sql queries with parameter values displayed), we
@@ -93,3 +94,9 @@ protected void Application_EndRequest()
     MiniProfiler.Current?.Stop(); // Be sure to stop the profiler!
 }
 ```
+
+#### Routes
+
+There are 2 user endpoints for MiniProfiler. The root is determined by `MiniProfilerOptions.RouteBasePath` (defaults to `/mini-profiler-resources`, but can be changed):
+- `/<base>/results-index`: A list of recent profilers, authorization required via `.ResultsAuthorize` and `.ResultsListAuthorize`
+- `/<base>/results`: Views either the very last profiler for the current user or a specific profiler via `?id={guid}`, authorization required via `.ResultsAuthorize`

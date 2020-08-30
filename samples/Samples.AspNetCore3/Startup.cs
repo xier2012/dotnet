@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,6 +13,7 @@ namespace Samples.AspNetCore
     public class Startup
     {
         public static string SqliteConnectionString { get; } = "Data Source=Samples; Mode=Memory; Cache=Shared";
+
         private static readonly SqliteConnection TrapConnection = new SqliteConnection(SqliteConnectionString);
 
         public Startup(IWebHostEnvironment env)
@@ -61,6 +63,8 @@ namespace Samples.AspNetCore
                 // To control authorization, you can use the Func<HttpRequest, bool> options:
                 options.ResultsAuthorize = _ => !Program.DisableProfilingResults;
                 //options.ResultsListAuthorize = request => MyGetUserFunction(request).CanSeeMiniProfiler;
+                //options.ResultsAuthorizeAsync = async request => (await MyGetUserFunctionAsync(request)).CanSeeMiniProfiler;
+                //options.ResultsAuthorizeListAsync = async request => (await MyGetUserFunctionAsync(request)).CanSeeMiniProfilerLists;
 
                 // To control which requests are profiled, use the Func<HttpRequest, bool> option:
                 //options.ShouldProfile = request => MyShouldThisBeProfiledFunction(request);
@@ -75,8 +79,28 @@ namespace Samples.AspNetCore
                 // Optionally disable "Connection Open()", "Connection Close()" (and async variants).
                 //options.TrackConnectionOpenClose = false;
 
+                // Optionally use something other than the "light" color scheme.
+                options.ColorScheme = StackExchange.Profiling.ColorScheme.Auto;
+
                 // Enabled sending the Server-Timing header on responses
                 options.EnableServerTimingHeader = true;
+
+                // Optionally disable MVC filter profiling
+                //options.EnableMvcFilterProfiling = false;
+                // Or only save filters that take over a certain millisecond duration (including their children)
+                //options.MvcFilterMinimumSaveMs = 1.0m;
+
+                // Optionally disable MVC view profiling
+                //options.EnableMvcViewProfiling = false;
+                // Or only save views that take over a certain millisecond duration (including their children)
+                //options.MvcViewMinimumSaveMs = 1.0m;
+
+                // This enables debug mode with stacks and tooltips when using memory storage
+                // It has a lot of overhead vs. normal profiling and should only be used with that in mind
+                //options.EnableDebugMode = true;
+                
+                // Optionally listen to any errors that occur within MiniProfiler itself
+                //options.OnInternalError = e => MyExceptionLogger(e);
 
                 options.IgnoredPaths.Add("/lib");
                 options.IgnoredPaths.Add("/css");
@@ -96,10 +120,29 @@ namespace Samples.AspNetCore
                 app.UseExceptionHandler("/Home/Error");
             }
 
+            
             app.UseMiniProfiler()
                .UseStaticFiles()
                .UseRouting()
-               .UseEndpoints(endpoints => endpoints.MapDefaultControllerRoute());
+               .UseEndpoints(endpoints =>
+               {
+                   endpoints.MapAreaControllerRoute("areaRoute", "MySpace",
+                       "MySpace/{controller=Home}/{action=Index}/{id?}");
+                   endpoints.MapControllerRoute("default_route","{controller=Home}/{action=Index}/{id?}");
+                  
+                   endpoints.MapRazorPages();
+                   endpoints.MapGet("/named-endpoint", async httpContext =>
+                   {
+                       var endpointName = httpContext.GetEndpoint().DisplayName;
+                       await httpContext.Response.WriteAsync($"Content from an endpoint named {endpointName}");
+                   }).WithDisplayName("Named Endpoint");
+
+                   endpoints.MapGet("implicitly-named-endpoint", async httpContext =>
+                   {
+                       var endpointName = httpContext.GetEndpoint().DisplayName;
+                       await httpContext.Response.WriteAsync($"Content from an endpoint named {endpointName}");
+                   });
+               });
 
             var serviceScopeFactory = app.ApplicationServices.GetRequiredService<IServiceScopeFactory>();
             using (var serviceScope = serviceScopeFactory.CreateScope())

@@ -56,6 +56,8 @@ namespace Samples.AspNetCore
                 // To control authorization, you can use the Func<HttpRequest, bool> options:
                 options.ResultsAuthorize = _ => !Program.DisableProfilingResults;
                 //options.ResultsListAuthorize = request => MyGetUserFunction(request).CanSeeMiniProfiler;
+                //options.ResultsAuthorizeAsync = async request => (await MyGetUserFunctionAsync(request)).CanSeeMiniProfiler;
+                //options.ResultsAuthorizeListAsync = async request => (await MyGetUserFunctionAsync(request)).CanSeeMiniProfilerLists;
 
                 // To control which requests are profiled, use the Func<HttpRequest, bool> option:
                 //options.ShouldProfile = request => MyShouldThisBeProfiledFunction(request);
@@ -67,8 +69,14 @@ namespace Samples.AspNetCore
                 // The default handles async and works fine for almost all applications
                 //options.ProfilerProvider = new MyProfilerProvider();
 
+                // Optionally use something other than the "light" color scheme.
+                options.ColorScheme = StackExchange.Profiling.ColorScheme.Auto;
+
                 // Optionally disable "Connection Open()", "Connection Close()" (and async variants).
                 //options.TrackConnectionOpenClose = false;
+                
+                // Optionally listen to any errors that occur within MiniProfiler itself
+                //options.OnInternalError = e => MyExceptionLogger(e);
             }).AddEntityFramework();
 
             services.AddLogging(builder =>
